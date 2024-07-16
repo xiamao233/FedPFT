@@ -196,20 +196,34 @@ class Server(BasicParty):
         return selected_clients
 
     def align_model(self):
-        params_name_require_grad = [name for name, param in self.sub_model.named_parameters() if param.requires_grad]
+        params_name_require_grad = [name for name, param in self.sub_model.named_parameters() if param.requires_grad] ##获取sub_model中需要进行梯度计算的参数名
+
+        # 将model中的所有参数的requires_grad属性设置为False
         for params in self.model.parameters():
             params.requires_grad = False
+        
+         # 将sub_model中的所有参数的requires_grad属性设置为False
         for params in self.sub_model.parameters():
             params.requires_grad = False
+
+        # 判断model.base_model是否是LoraModel类型的实例
         if isinstance(self.model.base_model, LoraModel):
+            # 如果是，则teacher_model是model.base_model.model
             teacher_model = self.model.base_model.model
+            # student_model是sub_model.base_model.model
             student_model = self.sub_model.base_model.model
         else:
+            # 否则teacher_model是model.base_model
             teacher_model = self.model.base_model
+            # student_model是sub_model.base_model
             student_model = self.sub_model.base_model
+        # 初始化一个空字典，用于存储需要更新的神经元
         neuron_need_to_update = {}
+        
         if self.config['align_retained_ratio'] > 0:
+            # 获取student_model中中间层的神经元数量
             num_neuron = student_model.base_model.config.intermediate_rank
+            # 根据配置中的align_retained_ratio计算需要保留的神经元数量
             num_retained_neuron = int(num_neuron * self.config['align_retained_ratio'])
             for i, layer in enumerate(student_model.base_model.encoder.layer):
                 if i not in self.config['retained_layers_idx']:
