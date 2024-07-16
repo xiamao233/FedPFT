@@ -221,24 +221,24 @@ class Server(BasicParty):
         neuron_need_to_update = {}
         
         if self.config['align_retained_ratio'] > 0:
-            # 获取student_model中中间层的神经元数量
+            # 获取student_model中中间层的神经元数量(所以这里本身就是从student model提取的神经元！）
             num_neuron = student_model.base_model.config.intermediate_rank
             # 根据配置中的align_retained_ratio计算需要保留的神经元数量
             num_retained_neuron = int(num_neuron * self.config['align_retained_ratio'])
-            for i, layer in enumerate(student_model.base_model.encoder.layer):
-                if i not in self.config['retained_layers_idx']:
-                    new_index = [j for j in range(num_neuron)]
-                    random.shuffle(new_index)
-                    retained_neuron_with_new_index = torch.sort(self.APoZs_of_layers[i][new_index])[1][:num_retained_neuron]
-                    other_neuron_with_new_index = torch.sort(self.APoZs_of_layers[i][new_index])[1][num_retained_neuron:]
+            for i, layer in enumerate(student_model.base_model.encoder.layer): #遍历student_model的编码器层
+                if i not in self.config['retained_layers_idx']: #当前层的索引是否在retained_layers_idx配置当中
+                    new_index = [j for j in range(num_neuron)] #对不在retained_layers_idx的层做更新（就是保留的层不更新，没问题）（num_neuron是student model中的neuron大小）
+                    random.shuffle(new_index) #创建随机排列的神经元索引表
+                    retained_neuron_with_new_index = torch.sort(self.APoZs_of_layers[i][new_index])[1][:num_retained_neuron] #这行选择的是APoZ值较小的神经元，对于下游任务更加活跃
+                    other_neuron_with_new_index = torch.sort(self.APoZs_of_layers[i][new_index])[1][num_retained_neuron:] #这行选择的是APoZ值较大的神经元，对于下游任务不活跃
 
-                    retained_neuron = torch.tensor(new_index, device=retained_neuron_with_new_index.device)[retained_neuron_with_new_index]
+                    retained_neuron = torch.tensor(new_index, device=retained_neuron_with_new_index.device)[retained_neuron_with_new_index] #new_index转化为张量，与retained_neuron_with_new_index相同。
                     other_neuron = torch.tensor(new_index, device=other_neuron_with_new_index.device)[other_neuron_with_new_index]
-                    neuron_need_to_update[i] = other_neuron
-                    state_dict_of_split_intermediate = collections.OrderedDict([
-                        ('dense1.weight', layer.intermediate.dense.weight[retained_neuron]),
+                    neuron_need_to_update[i] = other_neuron ##更新APoZ较大的神经元！
+                    state_dict_of_split_intermediate = collections.OrderedDict([ #将中间层和输出层按照保留神经元和其他神经元进行分割
+                        ('dense1.weight', layer.intermediate.dense.weight[retained_neuron]), #‘dense1.weight’存储保留神经元的权重
                         ('dense1.bias', layer.intermediate.dense.bias[retained_neuron]),
-                        ('dense2.weight', layer.intermediate.dense.weight[other_neuron]),
+                        ('dense2.weight', layer.intermediate.dense.weight[other_neuron]), #‘dense2.weight’存储其他神经元的权重
                         ('dense2.bias', layer.intermediate.dense.bias[other_neuron])
                     ])
                     state_dict_of_split_output = collections.OrderedDict([
@@ -248,23 +248,23 @@ class Server(BasicParty):
                         ('LayerNorm.weight', layer.output.LayerNorm.weight),
                         ('LayerNorm.bias', layer.output.LayerNorm.bias)
                     ])
-                    layer.split_intermediate.load_state_dict(state_dict_of_split_intermediate)
+                    layer.split_intermediate.load_state_dict(state_dict_of_split_intermediate) #将上一步的字典加载到layer对象的split_intermediate子模块中
                     layer.split_output.load_state_dict(state_dict_of_split_output)
-                    layer.feed_forward_chunk = types.MethodType(split_feed_forward_chunk, layer)
-                    params_name_need_update_list = ['split_intermediate.dense2.weight', 'split_intermediate.dense2.bias',
+                    layer.feed_forward_chunk = types.MethodType(split_feed_forward_chunk, layer) #？
+                    params_name_need_update_list = ['split_intermediate.dense2.weight', 'split_intermediate.dense2.bias', #列出更新对象
                                                     'split_output.dense2.weight', 'split_output.dense2.bias',
                                                     'split_output.LayerNorm.weight', 'split_output.LayerNorm.bias']
                     for name, params in layer.named_parameters():
-                        params.requires_grad = True if name in params_name_need_update_list else False
+                        params.requires_grad = True if name in params_name_need_update_list else False ##这部分参数进行更新！
         else:
             for i, layer in enumerate(student_model.base_model.encoder.layer):
                 if i not in self.config['retained_layers_idx']:
                     for name, params in layer.named_parameters():
-                        params.requires_grad = False if 'attention' in name else True
+                        params.requires_grad = False if 'attention' in name else True #冻结在‘retained_layers_idx’中的attention参数。（应该是所有attention层都被冻结了）
 
-        if self.gas > 2 and self.config['align_epochs'] > 1e-3:
+        if self.gas > 2 and self.config['align_epochs'] > 1e-3: #梯度累计步数（积累梯度来做梯度更新）
             self.gas //= 2
-        device_count = torch.cuda.device_count()
+        device_count = torch.cuda.device_count() #获取可用的GPU数量
         train_args = TrainingArguments(
             "./fed-result/{}/{}/{}-lr{}-lst{}-bs{}-e{}-rounds{}-proportion{}-lora-r{}-alpha{}-align{}-ai{}-ae{}-arr{}/align/round{}".format(
                 self.config['fedtask_name'],
@@ -286,7 +286,7 @@ class Server(BasicParty):
             ),
             remove_unused_columns=self.config['remove_unused_columns'],
             save_strategy='no',
-            per_device_train_batch_size=16,
+            per_device_train_batch_size=16, ##
             gradient_accumulation_steps=self.gas,
             learning_rate=6e-4,
             lr_scheduler_type='linear',
@@ -300,8 +300,9 @@ class Server(BasicParty):
             dataloader_num_workers=self.config['dataloader_num_workers'],
             logging_first_step=True
         )
-        if isinstance(teacher_model, RobertaForSequenceClassification):
+        if isinstance(teacher_model, RobertaForSequenceClassification): #查找teacher_model是不是Robert
             model = DistillRobertaModel(student_model.config, teacher_model.base_model, student_model.base_model, [i for i in self.config['retained_layers_idx']], post_init=False)
+            #创建一个DistillRobert的对象，（这个model不是从头开始的，它传递了学生模型配置、教师模型基础模型、学生模型基础模型以及需要保留的层索引，post_init是不执行默认的初始化操作）
         elif isinstance(teacher_model, BertForSequenceClassification):
             model = DistillBertModel(student_model.config, teacher_model.base_model, student_model.base_model, [i for i in self.config['retained_layers_idx']], post_init=False)
         else:
@@ -309,11 +310,11 @@ class Server(BasicParty):
         trainer = Trainer(
             model=model,
             args=train_args,
-            train_dataset=self.align_dataset,
+            train_dataset=self.align_dataset, #未知的dataset
             tokenizer=self.tokenizer,
-            data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
+            data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer), #处理变长数据
         )
-        trainer.train()
+        trainer.train() #所以APoZ对齐这部分是又做了一次训练更新？####################################
         if trainer.args.should_save:
             trainer.state.save_to_json(os.path.join(trainer.args.output_dir, 'align_trainer_state.json'))
         if self.config['align_retained_ratio'] > 0:
