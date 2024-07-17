@@ -339,7 +339,7 @@ def main(args):
         )
         clients.append(client)
     server.register_clients(clients)
-    server.run()
+    server.run() #################################################################
 
 
 if __name__ == '__main__':
