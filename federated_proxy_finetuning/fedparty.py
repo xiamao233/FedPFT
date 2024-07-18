@@ -343,21 +343,22 @@ class Server(BasicParty):
         torch.cuda.empty_cache()
         selected_clients = self.selected_clients_every_round[self.current_round] if self.config['pre_sample'] else self.sample()
         # training
-        packages = self.communicate(selected_clients)
-        adapter_models = packages['model']
-        nza_of_layers_list = packages['nza_of_layers']
+        packages = self.communicate(selected_clients) ######返回packages，包含客户端发送来的数据包。
+        adapter_models = packages['model'] #####从package中提取出的model值，客户端发送回来的model
+        nza_of_layers_list = packages['nza_of_layers'] #####从package中提取的nza_of_layers值，每一层的非零激活数列表
         # aggregate: pk = 1/K as default where K=len(selected_clients)
         self.adapter_model = self.aggregate(adapter_models)
-        self.APoZs_of_layers = self.compute_APoZs(nza_of_layers_list)
+        self.APoZs_of_layers = self.compute_APoZs(nza_of_layers_list) ##############################################################################
         return len(adapter_models) > 0
 
 
     def compute_APoZs(self, nza_of_layers_list):
-        if nza_of_layers_list[0] is None:
+        if nza_of_layers_list[0] is None: 
             return None
+        #隐藏层，介于输入层和输出层之间的层
         num_hidden_layers = self.model.base_model.model.base_model.config.num_hidden_layers if isinstance(self.model.base_model, LoraModel) else self.model.base_model.base_model.config.num_hidden_layers
         APoZs_of_layers = {i: None for i in range(num_hidden_layers)}
-        na = sum([i['na'] for i in nza_of_layers_list])
+        na = sum([i['na'] for i in nza_of_layers_list]) #na: number of activations
         for key in APoZs_of_layers.keys():
             if key not in self.config['retained_layers_idx']:
                 APoZs_of_layers[key] = sum([i[key] for i in nza_of_layers_list]) / na
