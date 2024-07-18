@@ -69,14 +69,14 @@ def construct_sub_model(model, qk_rank, intermediate_rank, sub_model_path, layer
             layer.attention.load_state_dict(model.encoder.layer[i].attention.state_dict())
             layer.output.LayerNorm.load_state_dict(model.encoder.layer[i].output.LayerNorm.state_dict())
             if i not in layers_retained:
-                intermediate_weight = model.encoder.layer[i].intermediate.dense.weight.data  # intermediate_size * dim_i
+                intermediate_weight = model.encoder.layer[i].intermediate.dense.weight.data  # intermediate_size * dim_i  3072*768
                 intermediate_bias = model.encoder.layer[i].intermediate.dense.bias.data  # intermediate_size
                 layer_output_weight = model.encoder.layer[i].output.dense.weight.data  # dim_i * intermediate_size
                 layer_output_bias = model.encoder.layer[i].output.dense.bias.data  # dim_i
                 neuron_saliency = torch.cat([intermediate_weight, layer_output_weight.transpose(0, 1)], dim=1).norm(dim=1)
                 neuron_retained = sorted(neuron_saliency.sort(descending=True)[1][:intermediate_rank])
-                new_intermediate_weight = intermediate_weight[neuron_retained]
-                new_intermediate_bias = intermediate_bias[neuron_retained]
+                new_intermediate_weight = intermediate_weight[neuron_retained] # 从选中的神经元中提取新的中间层权重和偏置 intermediate_rank* dim_i 768*768
+                new_intermediate_bias = intermediate_bias[neuron_retained] 
                 new_layer_output_weight = layer_output_weight[:, neuron_retained]
                 layer.intermediate.dense.load_state_dict(OrderedDict([
                     ('weight', new_intermediate_weight),
